@@ -3,10 +3,11 @@
 //! This driver is built using [`embedded-hal`] traits.
 
 #![no_std]
-#![deny(missing_docs)]
-#![deny(warnings)]
+#![deny(unused_must_use)]
+// #![deny(missing_docs)]
+// #![deny(warnings)]
 
-use embedded_hal as ehal;
+use embedded_hal::i2c;
 
 use core::result::*;
 use core::fmt;
@@ -17,7 +18,7 @@ const DEFAULT_ADDRESS: u8 = 0x76;
 const SEA_LEVEL_PRESSURE_KPA: f64 = 101.325;
 
 /// BMP280 driver
-pub struct BMP280<I2C: ehal::blocking::i2c::WriteRead> {
+pub struct BMP280<I2C: i2c::I2c> {
     com: I2C,
     addr: u8,
     // Temperature compensation
@@ -39,11 +40,9 @@ pub struct BMP280<I2C: ehal::blocking::i2c::WriteRead> {
     ground_pressure: f64, // TODO: is this in kPa or hPa????
 }
 
-impl<I2C: ehal::blocking::i2c::WriteRead> BMP280<I2C> {
+impl<I2C: i2c::I2c> BMP280<I2C> {
     /// Creates new BMP280 driver with the specified address
-    pub fn new_with_address<E>(i2c: I2C, addr: u8) -> Result<BMP280<I2C>, E>
-    where
-        I2C: ehal::blocking::i2c::WriteRead<Error = E>,
+    pub fn new_with_address(i2c: I2C, addr: u8) -> Result<BMP280<I2C>, I2C::Error>
     {
         let mut chip = BMP280 {
             com: i2c,
@@ -64,28 +63,26 @@ impl<I2C: ehal::blocking::i2c::WriteRead> BMP280<I2C> {
             ground_pressure: SEA_LEVEL_PRESSURE_KPA,
         };
 
-        if chip.id() == 0x58 {
-            chip.read_calibration();
+        if chip.id()? == 0x58 {
+            chip.read_calibration()?;
         }
 
         Ok(chip)
     }
 
     /// Create a new BMP280 driver with the default address
-    pub fn new<E>(i2c: I2C) -> Result<BMP280<I2C>, E>
-    where
-        I2C: ehal::blocking::i2c::WriteRead<Error = E>,
+    pub fn new(i2c: I2C) -> Result<BMP280<I2C>, I2C::Error>
     {
         Self::new_with_address(i2c, DEFAULT_ADDRESS)
     }
 }
 
-impl<I2C: ehal::blocking::i2c::WriteRead> BMP280<I2C> {
-    fn read_calibration(&mut self) {
+impl<I2C: i2c::I2c> BMP280<I2C> {
+    fn read_calibration(&mut self) -> Result<(), I2C::Error> {
         let mut data: [u8; 24] = [0; 24];
-        let _ = self
+        self
             .com
-            .write_read(self.addr, &[Register::calib00 as u8], &mut data);
+            .write_read(self.addr, &[Register::calib00 as u8], &mut data)?;
 
         self.dig_t1 = ((data[1] as u16) << 8) | (data[0] as u16);
         self.dig_t2 = ((data[3] as i16) << 8) | (data[2] as i16);
@@ -100,14 +97,16 @@ impl<I2C: ehal::blocking::i2c::WriteRead> BMP280<I2C> {
         self.dig_p7 = ((data[19] as i16) << 8) | (data[18] as i16);
         self.dig_p8 = ((data[21] as i16) << 8) | (data[20] as i16);
         self.dig_p9 = ((data[23] as i16) << 8) | (data[22] as i16);
+
+        Ok(())
     }
 
     /// Reads and returns pressure
-    pub fn pressure(&mut self) -> f64 {
+    pub fn pressure(&mut self) -> Result<f64, I2C::Error> {
         let mut data: [u8; 6] = [0, 0, 0, 0, 0, 0];
-        let _ = self
+        self
             .com
-            .write_read(self.addr, &[Register::press as u8], &mut data);
+            .write_read(self.addr, &[Register::press as u8], &mut data)?;
         let press = (data[0] as u32) << 12 | (data[1] as u32) << 4 | (data[2] as u32) >> 4;
 
         let mut var1 = ((self.t_fine as f64) / 2.0) - 64000.0;
@@ -124,46 +123,47 @@ impl<I2C: ehal::blocking::i2c::WriteRead> BMP280<I2C> {
             var2 = pressure * (self.dig_p8 as f64) / 32768.0;
             pressure += (var1 + var2 + (self.dig_p7 as f64)) / 16.0;
         }
-        pressure
+        Ok(pressure)
     }
 
     /// Reads and returns pressure and resets con
-    pub fn pressure_one_shot(&mut self) -> f64 {
-        let pressure = self.pressure();
+    pub fn pressure_one_shot(&mut self) -> Result<f64, I2C::Error> {
+        let pressure = self.pressure()?;
         self.set_control(Control {
             osrs_t: Oversampling::x2,
             osrs_p: Oversampling::x16,
             mode: PowerMode::Forced,
-        });
+        })?;
 
-        pressure
+        Ok(pressure)
     }
 
     /// 'Zeros' the pressure to the current pressure. Subsequent altitude readings will be relative to this altitude
-    pub fn zero(&mut self) {
-        self.ground_pressure = self.pressure();
+    pub fn zero(&mut self) -> Result<(), I2C::Error> {
+        self.ground_pressure = self.pressure()?;
+        Ok(())
     }
 
     /// Returns altitude in meters, relative to altitude when the `zero` method was called
-    pub fn altitude(&mut self) -> f64 {
-        let pressure = self.pressure();
+    pub fn altitude(&mut self) -> Result<f64, I2C::Error> {
+        let pressure = self.pressure()?;
         let altitude = (1.0 - pow(pressure / self.ground_pressure, 0.190284)) * 44330.0;
-        altitude
+        Ok(altitude)
     }
 
     /// Returns the altitude in meters, relative to `ground_pressure`
-    pub fn relative_altitude(&mut self, ground_pressure: f64) -> f64 {
-        let pressure = self.pressure();
+    pub fn relative_altitude(&mut self, ground_pressure: f64) -> Result<f64, I2C::Error> {
+        let pressure = self.pressure()?;
         let altitude = (1.0 - pow(pressure / ground_pressure, 0.190284)) * 44330.0;
-        altitude
+        Ok(altitude)
     }
 
     /// Reads and returns temperature
-    pub fn temp(&mut self) -> f64 {
+    pub fn temp(&mut self) -> Result<f64, I2C::Error> {
         let mut data: [u8; 6] = [0, 0, 0, 0, 0, 0];
-        let _ = self
+        self
             .com
-            .write_read(self.addr, &[Register::press as u8], &mut data);
+            .write_read(self.addr, &[Register::press as u8], &mut data)?;
         let _pres = (data[0] as u32) << 12 | (data[1] as u32) << 4 | (data[2] as u32) >> 4;
         let temp = (data[3] as u32) << 12 | (data[4] as u32) << 4 | (data[5] as u32) >> 4;
 
@@ -173,24 +173,24 @@ impl<I2C: ehal::blocking::i2c::WriteRead> BMP280<I2C> {
             * (self.dig_t3 as f64);
         self.t_fine = (v1 + v2) as i32;
 
-        (v1 + v2) / 5120.0
+        Ok((v1 + v2) / 5120.0)
     }
 
     /// Reads and returns temperature and resets control
-    pub fn temp_one_shot(&mut self) -> f64 {
-        let temp = self.temp();
+    pub fn temp_one_shot(&mut self) -> Result<f64, I2C::Error> {
+        let temp = self.temp()?;
         self.set_control(Control {
             osrs_t: Oversampling::x2,
             osrs_p: Oversampling::x16,
             mode: PowerMode::Forced,
-        });
+        })?;
 
-        temp
+        Ok(temp)
     }
 
     /// Returns current config
-    pub fn config(&mut self) -> Config {
-        let config = self.read_byte(Register::config);
+    pub fn config(&mut self) -> Result<Config, I2C::Error> {
+        let config = self.read_byte(Register::config)?;
         let t_sb = match (config & (0b111 << 5)) >> 5 {
             x if x == Standby::ms0_5 as u8 => Standby::ms0_5,
             x if x == Standby::ms62_5 as u8 => Standby::ms62_5,
@@ -210,28 +210,28 @@ impl<I2C: ehal::blocking::i2c::WriteRead> BMP280<I2C> {
             x if x == Filter::c16 as u8 => Filter::c16,
             _ => Filter::unknown,
         };
-        Config { t_sb, filter }
+        Ok(Config { t_sb, filter })
     }
 
     /// Sets configuration
-    pub fn set_config(&mut self, new: Config) {
+    pub fn set_config(&mut self, new: Config) -> Result<(), I2C::Error> {
         let config: u8 = 0x00;
         let t_sb = (new.t_sb as u8) << 5;
         let filter = (new.filter as u8) << 2;
-        self.write_byte(Register::config, config | t_sb | filter);
+        self.write_byte(Register::config, config | t_sb | filter)
     }
 
     /// Sets control
-    pub fn set_control(&mut self, new: Control) {
+    pub fn set_control(&mut self, new: Control) -> Result<(), I2C::Error> {
         let osrs_t: u8 = (new.osrs_t as u8) << 5;
         let osrs_p: u8 = (new.osrs_p as u8) << 2;
         let control: u8 = osrs_t | osrs_p | (new.mode as u8);
-        self.write_byte(Register::ctrl_meas, control);
+        self.write_byte(Register::ctrl_meas, control)
     }
 
     /// Returns control
-    pub fn control(&mut self) -> Control {
-        let config = self.read_byte(Register::ctrl_meas);
+    pub fn control(&mut self) -> Result<Control, I2C::Error> {
+        let config = self.read_byte(Register::ctrl_meas)?;
         let osrs_t = match (config & (0b111 << 5)) >> 5 {
             x if x == Oversampling::skipped as u8 => Oversampling::skipped,
             x if x == Oversampling::x1 as u8 => Oversampling::x1,
@@ -255,43 +255,44 @@ impl<I2C: ehal::blocking::i2c::WriteRead> BMP280<I2C> {
             _ => PowerMode::Forced,
         };
 
-        Control {
+        Ok(Control {
             osrs_t,
             osrs_p,
             mode,
-        }
+        })
     }
 
     /// Returns device status
-    pub fn status(&mut self) -> Status {
-        let status = self.read_byte(Register::status);
-        Status {
+    pub fn status(&mut self) -> Result<Status, I2C::Error> {
+        let status = self.read_byte(Register::status)?;
+        Ok(Status {
             measuring: 0 != (status & 0b00001000),
             im_update: 0 != (status & 0b00000001),
-        }
+        })
     }
 
     /// Returns device id
-    pub fn id(&mut self) -> u8 {
+    pub fn id(&mut self) -> Result<u8, I2C::Error> {
         self.read_byte(Register::id)
     }
 
     /// Software reset, emulates POR
-    pub fn reset(&mut self) {
-        self.write_byte(Register::reset, 0xB6); // Magic from documentation
+    pub fn reset(&mut self) -> Result<(), I2C::Error> {
+        self.write_byte(Register::reset, 0xB6) // Magic from documentation
     }
 
-    fn write_byte(&mut self, reg: Register, byte: u8) {
+    fn write_byte(&mut self, reg: Register, byte: u8) -> Result<(), I2C::Error> {
         let mut buffer = [0];
         let _ = self
             .com
             .write_read(self.addr, &[reg as u8, byte], &mut buffer);
+        Ok(())
     }
 
-    fn read_byte(&mut self, reg: Register) -> u8 {
+    fn read_byte(&mut self, reg: Register) -> Result<u8, I2C::Error> {
         let mut data: [u8; 1] = [0];
-        let _ = self.com.write_read(self.addr, &[reg as u8], &mut data);
-        data[0]
+        let _ = self.com.write_read(self.addr, &[reg as u8], &mut data)?;
+        Ok(data[0])
     }
 }
 
