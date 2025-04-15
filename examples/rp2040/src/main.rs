@@ -22,9 +22,9 @@ fn main() -> ! {
     let mut bmp280 = BMP280::new(i2c).unwrap();
 
     loop {
-        let temperature = bmp280.temp();
-        let pressure = bmp280.pressure();
-        let altitude = bmp280.altitude();
+        let temperature = bmp280.temp().unwrap();
+        let pressure = bmp280.pressure().unwrap();
+        let altitude = bmp280.altitude().unwrap();
 
         defmt::info!("Temp: {} C", temperature);
         defmt::info!("Pressure: {} Pa", pressure);
