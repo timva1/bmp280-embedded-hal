@@ -1,1 +1,1 @@
-# bmp280_embedded_hal
+# bmp280-embedded-hal
