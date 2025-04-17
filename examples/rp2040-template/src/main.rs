@@ -32,5 +32,4 @@ fn main() -> ! {
 
         cortex_m::asm::delay(1_000_000);
     }
-    
 }

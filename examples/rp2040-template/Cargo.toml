@@ -1,0 +1,21 @@
+[package]
+name = "rp-alloc"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cortex-m = "0.7.3"
+cortex-m-rt = "0.7.3"
+defmt = "1.0.1"
+defmt-rtt = "1.0.0"
+embassy-rp = { version = "0.4.0", features = [
+    "defmt",
+    "unstable-pac",
+    "critical-section-impl",
+    "rp2040",
+] }
+embassy-time = { version = "0.4.0", features = ["defmt"] }
+embedded-alloc = "0.6.0"
+panic-probe = { version = "1.0.0", features = ["print-defmt"] }
+embedded-hal = { version = "1.0.0" }
+bmp280-embedded-hal = {path = "../.."}
